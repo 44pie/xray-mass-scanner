@@ -14,8 +14,6 @@ X-Ray Mass Scanner (XMS) is a complete ecosystem of four specialized tools that 
 3. **sqlmap_runner.py** - Automated SQLMap launcher using byobu sessions  
 4. **sqlmap_runner_tmx.py** - Automated SQLMap launcher using tmux sessions
 
-All tools feature colorful ASCII banners and real-time progress indicators for a professional user experience.
-
 ## ✨ Features
 
 ### xr_crawler_runner.py (Scanner)
@@ -23,7 +21,6 @@ All tools feature colorful ASCII banners and real-time progress indicators for a
 - **Live Progress**: Real-time worker status with URL counts and vulnerability detection
 - **Smart Timeouts**: Automatic timeout management to prevent hanging scans
 - **Dual Output**: Generates both HTML and JSON reports for each target
-- **Color-Coded Output**: Green banner with cyan/magenta/yellow status indicators
 - **Resume Support**: Skip already scanned targets automatically
 
 ### xr_json_parser.py (Parser)
@@ -32,7 +29,6 @@ All tools feature colorful ASCII banners and real-time progress indicators for a
 - **SQLi Classification**: Categorizes vulnerabilities (Error-based, Time-based, General)
 - **CSV Export**: Structured output with domain, URL, parameter, method, and type
 - **Progress Tracking**: Shows file-by-file processing with counts
-- **Cyan Banner**: Professional formatting with colored output
 
 ### sqlmap_runner.py & sqlmap_runner_tmx.py (Exploiters)
 - **Automated Sessions**: Creates organized byobu/tmux sessions for each domain
@@ -42,7 +38,6 @@ All tools feature colorful ASCII banners and real-time progress indicators for a
 - **Domain Range**: Process specific domain ranges with `--start` and `-d` flags
 - **Dry Run Mode**: Preview commands before execution
 - **Command Logging**: Save all generated SQLMap commands to file (`--log` option)
-- **Yellow Banner**: Easy to distinguish from other tools
 
 ## 📦 Installation
 
@@ -196,7 +191,6 @@ Launch SQLMap in organized byobu sessions:
 - `F2` - Create new window
 - `F3/F4` - Switch between windows
 - `F6` - Detach session
-- `Ctrl+Z` - Suspend (DO NOT use Ctrl+C)
 - `byobu attach -t xr_example_com` - Reattach to session
 
 **Tmux:**
@@ -258,7 +252,6 @@ cat sqlmap_commands.txt
 ### X-Ray Requirements
 
 - **libpcap.so.0.8** is REQUIRED by X-Ray scanner
-- X-Ray will NOT work in containerized environments (Docker, Replit NixOS)
 - Use on **native Linux** systems (Ubuntu, Debian, Kali, Fedora, Arch)
 
 ### Installation on Linux:
@@ -276,7 +269,6 @@ sudo pacman -S libpcap
 
 ### Session Management
 
-- **DO NOT use Ctrl+C** in byobu/tmux sessions - use Ctrl+Z instead
 - Sessions continue running after detach - reattach to see progress
 - List sessions: `byobu list-sessions` or `tmux list-sessions`
 - Kill session: `byobu kill-session -t xr_example_com`
@@ -306,25 +298,11 @@ git clone https://github.com/sqlmapproject/sqlmap.git ~/sqlmap
 ### Byobu/Tmux Not Creating Sessions
 
 ```bash
-# Test byobu manually
-byobu new-session -d -s test_session
-
 # List sessions
 byobu list-sessions
 
-# If it works, the script should work too
-```
-
-### "No vulnerabilities found" in Parser
-
-```bash
-# Check if JSON files exist
-ls -lh output/json/*.json
-
-# Check JSON file content
-head -20 output/json/example_com.json
-
-# Ensure files are not empty or truncated
+# Test manually if needed
+byobu attach -t session_name
 ```
 
 ## 📝 License
