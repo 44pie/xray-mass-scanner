@@ -704,17 +704,30 @@ def load_targets(file_path):
 
 
 def main():
+    # Print banner first
+    print(BANNER)
+    print()
+    
     parser = argparse.ArgumentParser(description='X-Ray Parallel Runner - Live Progress Scanner')
-    parser.add_argument('-t', '--targets', required=True, help='File with target URLs/domains')
+    parser.add_argument('-l', '--list', required=True, dest='targets', help='File with target URLs/domains')
     parser.add_argument('-w', '--workers', type=int, default=4, help='Number of parallel workers (default: 4)')
-    parser.add_argument('-r', '--reports', default='./reports', help='Directory to save HTML and JSON reports (default: ./reports)')
+    parser.add_argument('-o', '--output', default='./reports', dest='reports', help='Directory to save HTML and JSON reports (default: ./reports)')
     parser.add_argument('--xray', default='./xray_linux_amd64', help='Path to X-Ray executable (e.g., xray_linux_amd64 or ./xray_linux_amd64)')
+    parser.add_argument('--start', type=int, default=1, help='Start from Nth target (default: 1)')
+    parser.add_argument('--stop', type=int, help='Stop at Nth target (process targets from --start to --stop)')
     
     args = parser.parse_args()
     
-    # Normalize X-Ray path - add ./ if relative path without prefix
-    if not args.xray.startswith(('./', '/', '~')):
-        args.xray = './' + args.xray
+    # Normalize X-Ray path - expand ~, resolve relative paths, and verify file exists
+    xray_path = Path(args.xray).expanduser().resolve()
+    if not xray_path.exists():
+        print(f"{COLOR_YELLOW}Error: X-Ray executable not found: {xray_path}{COLOR_RESET}")
+        print(f"Please check the path and try again.")
+        sys.exit(1)
+    if not xray_path.is_file():
+        print(f"{COLOR_YELLOW}Error: X-Ray path is not a file: {xray_path}{COLOR_RESET}")
+        sys.exit(1)
+    args.xray = str(xray_path)
     
     # Create reports directory
     reports_dir = Path(args.reports)
@@ -722,12 +735,28 @@ def main():
     
     # Load targets
     print(f"Loading targets from {args.targets}...")
-    targets = load_targets(args.targets)
-    print(f"Loaded {len(targets)} targets\n")
+    all_targets = load_targets(args.targets)
+    total_targets = len(all_targets)
+    print(f"Loaded {total_targets} targets")
     
-    if len(targets) == 0:
+    if total_targets == 0:
         print("No targets found!")
         return
+    
+    # Apply start/stop filtering
+    start_idx = args.start - 1  # Convert to 0-based index
+    stop_idx = args.stop if args.stop else total_targets
+    
+    targets = all_targets[start_idx:stop_idx]
+    
+    if not targets:
+        print(f"{COLOR_YELLOW}No targets to scan with given range{COLOR_RESET}")
+        return
+    
+    if args.start > 1 or args.stop:
+        print(f"{COLOR_CYAN}Processing targets {args.start} to {args.start + len(targets) - 1} ({len(targets)} total){COLOR_RESET}\n")
+    else:
+        print()
     
     # Initialize console renderer
     renderer = ConsoleRenderer(args.workers)
