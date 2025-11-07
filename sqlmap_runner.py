@@ -346,13 +346,12 @@ def main():
     print(f"  {COLOR_CYAN}Domains processed:{COLOR_RESET} {len(selected_domains)}")
     print(f"  {COLOR_CYAN}Sessions created:{COLOR_RESET} {len(selected_domains)}")
     
-    if not args.dry_run:
-        print(f"\n{COLOR_YELLOW}To attach to a session:{COLOR_RESET}")
-        print(f"  byobu attach-session -t {args.prefix}_<domain_name>")
-        print(f"\n{COLOR_YELLOW}To list all sessions:{COLOR_RESET}")
-        print(f"  byobu list-sessions")
-        print(f"\n{COLOR_YELLOW}To kill a session:{COLOR_RESET}")
-        print(f"  byobu kill-session -t {args.prefix}_<domain_name>")
+    print(f"\n{COLOR_YELLOW}To attach to a session:{COLOR_RESET}")
+    print(f"  byobu attach-session -t {args.prefix}_<domain_name>")
+    print(f"\n{COLOR_YELLOW}To list all sessions:{COLOR_RESET}")
+    print(f"  byobu list-sessions")
+    print(f"\n{COLOR_YELLOW}To kill a session:{COLOR_RESET}")
+    print(f"  byobu kill-session -t {args.prefix}_<domain_name>")
     
     print(f"{COLOR_GREEN}{'='*60}{COLOR_RESET}\n")
 
