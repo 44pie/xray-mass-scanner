@@ -25,7 +25,7 @@ BANNER_LINES = [
     "||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__|||__||",
     "|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|/__\\|"
 ]
-BANNER = f"{COLOR_BLUE}" + "\n".join(BANNER_LINES) + f"{COLOR_RESET}"
+BANNER = f"{COLOR_CYAN}" + "\n".join(BANNER_LINES) + f"{COLOR_RESET}"
 
 
 def extract_post_vulns_regex(content):
