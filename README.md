@@ -7,36 +7,35 @@ A powerful Python CLI toolkit for large-scale vulnerability scanning and automat
 
 ## 🎯 Overview
 
-X-Ray Mass Scanner (XMS) is a complete ecosystem of four specialized tools that work together to streamline the vulnerability assessment workflow:
+X-Ray Mass Scanner (XMS) is a complete ecosystem of three specialized tools that work together to streamline the vulnerability assessment workflow:
 
-1. **xr_crawler_runner.py** - Parallel vulnerability scanner with real-time progress tracking
-2. **xr_json_parser.py** - JSON report parser that extracts vulnerabilities to CSV
-3. **sqlmap_runner.py** - Automated SQLMap launcher using byobu sessions  
-4. **sqlmap_runner_tmx.py** - Automated SQLMap launcher using tmux sessions
+1. **crawler_runner.py** - Parallel vulnerability scanner with real-time progress tracking
+2. **request_generator.py** - Request file generator for GET and POST vulnerabilities (SQLMap `-r` flag)
+3. **sqlmap_runner.py** - Automated SQLMap launcher using byobu sessions
 
 ## ✨ Features
 
-### xr_crawler_runner.py (Scanner)
+### crawler_runner.py (Scanner)
 - **Parallel Scanning**: Run multiple X-Ray instances simultaneously (configurable workers)
 - **Live Progress**: Real-time worker status with URL counts and vulnerability detection
 - **Smart Timeouts**: Automatic timeout management to prevent hanging scans
 - **Dual Output**: Generates both HTML and JSON reports for each target
 - **Resume Support**: Skip already scanned targets automatically
 
-### xr_json_parser.py (Parser)
-- **Accurate Extraction**: Reads parameter names from `detail.extra.param.key` (the correct source!)
-- **Method Detection**: Automatically determines GET/POST from parameter position
-- **SQLi Classification**: Categorizes vulnerabilities (Error-based, Time-based, General)
-- **CSV Export**: Structured output with domain, URL, parameter, method, and type
-- **Progress Tracking**: Shows file-by-file processing with counts
+### request_generator.py (Request Generator)
+- **Full HTTP Extraction**: Creates clean SQLMap request files from both GET and POST vulnerabilities
+- **Regex-Based Parsing**: Works with corrupted JSON data
+- **Organized Structure**: Generates `requests/domain/param_001.txt` hierarchy
+- **Payload Cleaning**: Removes X-Ray SQL injection payloads from all parameters (body and query string)
+- **Validation**: Skips requests where parameter not found
 
-### sqlmap_runner.py & sqlmap_runner_tmx.py (Exploiters)
-- **Automated Sessions**: Creates organized byobu/tmux sessions for each domain
+### sqlmap_runner.py (SQLMap Automation)
+- **Automated Sessions**: Creates organized byobu sessions for each domain
 - **Smart Selection**: Prioritizes unique parameters (configurable windows per domain)
-- **CSV Input**: Reads directly from xr_json_parser.py output
+- **Request File Input**: Reads directly from request_generator.py output
 - **Customizable Templates**: Edit SQLMap command template at top of script
-- **Domain Range**: Process specific domain ranges with `--start` and `-d` flags
-- **Dry Run Mode**: Preview commands before execution
+- **Domain Range**: Process specific domain ranges with `--start` and `-c` flags
+- **Session Management**: Use `--stop` to kill all existing xr_* sessions before starting
 - **Command Logging**: Save all generated SQLMap commands to file (`--log` option)
 
 ## 📦 Installation
@@ -55,7 +54,7 @@ chmod +x install.sh
 
 The installer will automatically:
 - Install Python 3 and pip
-- Install byobu and tmux
+- Install byobu and
 - Clone and setup SQLMap from GitHub
 - Install libpcap (required by X-Ray)
 - Make all scripts executable
@@ -67,13 +66,13 @@ The installer will automatically:
 ```bash
 # Ubuntu/Debian/Kali
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip byobu tmux libpcap0.8
+sudo apt-get install -y python3 python3-pip byobu libpcap0.8
 
 # Fedora/RHEL/CentOS
-sudo dnf install -y python3 python3-pip byobu tmux libpcap
+sudo dnf install -y python3 python3-pip byobu libpcap
 
 # Arch/Manjaro
-sudo pacman -S python python-pip byobu tmux libpcap
+sudo pacman -S python python-pip byobu libpcap
 ```
 
 #### Install SQLMap
@@ -93,19 +92,51 @@ mv xray_linux_amd64 xray/
 chmod +x xray/xray_linux_amd64
 ```
 
-## 🚀 Usage
+## 🚀 Quick Start
 
-### Step 1: Scan Targets (xr_crawler_runner.py)
+### Using Unified Launcher (xms.py)
+
+The easiest way to use XMS is through the unified launcher:
+
+```bash
+# Show help and all available modules
+python3 xms.py -h
+
+# Run scanner (cr = Crawler Runner)
+python3 xms.py cr -l urls.txt --xray ~/xray/xray_linux_amd64 -w 10
+
+# Generate request files (rg = Request Generator)
+python3 xms.py rg -d output/json -o requests
+
+# Run SQLMap automation (sr = SQLMap Runner)
+python3 xms.py sr -r requests --sqlmap ~/sqlmap/sqlmap.py -c 10 -w 3
+```
+
+**Module shortcuts:**
+- `cr` - Crawler Runner (scanner)
+- `rg` - Request Generator
+- `sr` - SQLMap Runner
+
+## 🚀 Detailed Usage
+
+### Step 1: Scan Targets (crawler_runner.py)
 
 Scan multiple targets in parallel and generate HTML/JSON reports:
 
 ```bash
-./xr_crawler_runner.py --targets urls.txt --xray ./xray/xray_linux_amd64 -w 10
+# X-Ray in subdirectory (recommended)
+./crawler_runner.py -l urls.txt --xray ./xray/xray_linux_amd64 -w 10
+
+# X-Ray in home directory
+./crawler_runner.py -l urls.txt --xray ~/tools/xray/xray_linux_amd64 -w 10
+
+# X-Ray with absolute path
+./crawler_runner.py -l urls.txt --xray /usr/local/bin/xray -w 10
 ```
 
 **Options:**
 - `--targets FILE` - Text file with one URL per line
-- `--xray PATH` - Path to X-Ray binary (accepts both `xray_linux_amd64` and `./xray/xray_linux_amd64`)
+- `--xray PATH` - Path to X-Ray binary (supports relative, absolute, and ~ home directory paths)
 - `-w, --workers NUM` - Number of parallel workers (default: 5)
 - `--timeout SEC` - Timeout per target in seconds (default: 300)
 - `--reports-dir DIR` - Output directory (default: ./output)
@@ -127,65 +158,74 @@ output/
     └── test_com.json
 ```
 
-### Step 2: Extract Vulnerabilities (xr_json_parser.py)
+### Step 2b (Optional): Generate Request Files (request_generator.py)
 
-Parse JSON reports and extract SQL injection vulnerabilities to CSV:
+For GET and POST vulnerabilities, generate clean SQLMap request files:
 
 ```bash
-# Parse entire directory
-./xr_json_parser.py -d output/json -o vulnerabilities.csv
+# Generate request files from JSON reports
+./request_generator.py -d output/json -o requests
 
-# Parse specific files
-./xr_json_parser.py -f output/json/site1.json,output/json/site2.json -o results.csv
+# Output structure:
+# requests/
+#   example.com/
+#     id_GET_001.txt
+#     username_POST_001.txt
+#     password_POST_001.txt
+#   test.com/
+#     search_GET_001.txt
+#     email_POST_001.txt
+
+# Test with SQLMap
+sqlmap -r requests/example.com/username_POST_001.txt -p username --batch --risk 3 --level 5
 ```
 
 **Options:**
 - `-d, --directory DIR` - Directory containing JSON files
 - `-f, --files LIST` - Comma-separated list of JSON files
-- `-o, --output FILE` - Output CSV file (auto-generated if not specified)
+- `-o, --output DIR` - Output directory (default: requests)
 
-**CSV Output Format:**
-```csv
-domain,sqli_count,url,parameter,method,sqli_type
-https://example.com,3,https://example.com/page?id=1,id,GET,Error-based SQLi
-https://example.com,3,https://example.com/login,username,POST,Time-based SQLi
-```
+**Features:**
+- Extracts both GET (query string) and POST (body) vulnerabilities
+- Creates one directory per domain
+- Clear naming: `param_METHOD_001.txt` (e.g., `anyo_i_POST_001.txt`, `servicio_GET_001.txt`)
+- Automatically cleans X-Ray SQL injection payloads from all parameters
+- Full HTTP requests ready for manual SQLMap testing
 
 ### Step 3: Automated Exploitation (sqlmap_runner.py)
 
-Launch SQLMap in organized byobu sessions:
+Launch SQLMap in organized byobu sessions using request files:
 
 ```bash
 # Process first 10 domains with 3 windows each
-./sqlmap_runner.py --csv vulnerabilities.csv --sqlmap ~/sqlmap/sqlmap.py -d 10 -w 3
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py -c 10 -w 3
 
 # Log all commands to file
-./sqlmap_runner.py --csv vulnerabilities.csv --sqlmap ~/sqlmap/sqlmap.py -d 10 --log commands.txt
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py -c 10 --log commands.txt
 
 # Dry run (preview commands)
-./sqlmap_runner.py --csv vulnerabilities.csv --sqlmap ~/sqlmap/sqlmap.py -d 5 --dry-run
 
 # Process domains 11-20
-./sqlmap_runner.py --csv vulnerabilities.csv --sqlmap ~/sqlmap/sqlmap.py --start 11 -d 10
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py --start 11 -c 10
 ```
 
 **Options:**
-- `--csv FILE` - Input CSV file from xr_json_parser.py
+- `--req DIR` - Request files directory (from request_generator.py)
 - `--sqlmap PATH` - Path to sqlmap.py
-- `-d, --domains NUM` - Process only first N domains
+- `-d, --count NUM` - Process only first N domains
 - `-w, --windows NUM` - Max windows (parameters) per domain (default: 3)
 - `--start NUM` - Start from Nth domain (default: 1)
 - `-pf, --prefix STR` - Session name prefix (default: xr)
 - `--log FILE` - Save all generated sqlmap commands to file
 - `--dry-run` - Print commands without executing
 
-**Or use tmux instead:**
+**Or use instead:**
 
 ```bash
-./sqlmap_runner_tmx.py --csv vulnerabilities.csv --sqlmap ~/sqlmap/sqlmap.py -d 10 -w 3
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py -c 10 -w 3
 ```
 
-### Byobu/Tmux Navigation
+### Byobu Navigation
 
 **Byobu:**
 - `F2` - Create new window
@@ -193,27 +233,21 @@ Launch SQLMap in organized byobu sessions:
 - `F6` - Detach session
 - `byobu attach -t xr_example_com` - Reattach to session
 
-**Tmux:**
-- `Ctrl+b c` - Create new window
-- `Ctrl+b n/p` - Next/Previous window
-- `Ctrl+b d` - Detach session
-- `tmux attach -t xr_example_com` - Reattach to session
-
 ## ⚙️ Configuration
 
 ### Customize SQLMap Commands
 
-Edit the `SQLMAP_CMD_TEMPLATE` at the top of `sqlmap_runner.py` or `sqlmap_runner_tmx.py`:
+Edit the `SQLMAP_CMD_TEMPLATE` at the top of `sqlmap_runner.py` or `sqlmap_runner.py`:
 
 ```python
-# Default template
-SQLMAP_CMD_TEMPLATE = "python3 {sqlmap_path} -u '{url}' -p '{param}' --method {method} --risk 3 --level 5 --batch"
+# Default template (with -p flag for explicit parameter targeting)
+SQLMAP_CMD_TEMPLATE = 'python3 {sqlmap_path} -r "{request_file}" -p "{parameter}" --risk 3 --level 5 --batch'
 
 # Example with proxychains4
-SQLMAP_CMD_TEMPLATE = "proxychains4 -q python3 {sqlmap_path} -u '{url}' -p '{param}' --method {method} --risk 3 --level 5 --batch"
+SQLMAP_CMD_TEMPLATE = 'proxychains4 -q python3 {sqlmap_path} -r "{request_file}" -p "{parameter}" --risk 3 --level 5 --batch'
 
 # Example with custom options
-SQLMAP_CMD_TEMPLATE = "python3 {sqlmap_path} -u '{url}' -p '{param}' --method {method} --risk 3 --level 5 --batch --threads 10 --tamper=space2comment"
+SQLMAP_CMD_TEMPLATE = 'python3 {sqlmap_path} -r "{request_file}" -p "{parameter}" --risk 3 --level 5 --batch --threads 10 --tamper=space2comment'
 ```
 
 ## 📊 Workflow Example
@@ -228,23 +262,26 @@ https://test.com
 https://demo.com
 EOF
 
-# 2. Run parallel scan (10 workers)
-./xr_crawler_runner.py --targets targets.txt --xray ./xray/xray_linux_amd64 -w 10
+# 2. Run parallel scan (10 workers) - X-Ray path can be relative, absolute, or ~
+./crawler_runner.py -l targets.txt --xray ./xray/xray_linux_amd64 -w 10
 
-# 3. Parse JSON reports to CSV
-./xr_json_parser.py -d output/json -o vulns.csv
+# 3. Generate request files (GET and POST parameters)
+./request_generator.py -d output/json -o requests
 
-# 4. Launch SQLMap sessions (first 5 domains, log commands)
-./sqlmap_runner.py --csv vulns.csv --sqlmap ~/sqlmap/sqlmap.py -d 5 --log sqlmap_commands.txt
+# 5. Launch SQLMap sessions (first 5 domains, log commands)
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py -c 5 --log sqlmap_commands.txt
 
-# 5. Attach to a specific session
+# 6. Attach to a specific session
 byobu attach -t xr_example_com
 
-# 6. Detach and continue in background
+# 7. Detach and continue in background
 # Press F6 in byobu
 
-# 7. View generated commands
+# 8. View generated commands
 cat sqlmap_commands.txt
+
+# 9. (Optional) Test vulnerabilities manually
+sqlmap -r requests/example.com/username_POST_001.txt -p username --batch --risk 3 --level 5
 ```
 
 ## ⚠️ Important Notes
@@ -270,8 +307,38 @@ sudo pacman -S libpcap
 ### Session Management
 
 - Sessions continue running after detach - reattach to see progress
-- List sessions: `byobu list-sessions` or `tmux list-sessions`
+- List sessions: `byobu list-sessions`
 - Kill session: `byobu kill-session -t xr_example_com`
+
+### Handling Duplicate Sessions
+
+When you run the script multiple times, it **automatically creates numbered sessions**:
+
+```bash
+# First run
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py
+# Creates: xr_example_com
+
+# Second run (session exists)
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py
+# Creates: xr_example_com_2
+
+# Third run
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py
+# Creates: xr_example_com_3
+```
+
+**Manual session cleanup:**
+```bash
+# Use --stop flag to kill all xr_* sessions and create new ones
+./sqlmap_runner.py -r requests --sqlmap ~/sqlmap/sqlmap.py --stop
+
+# Kill specific session
+byobu kill-session -t xr_example_com
+
+# Kill all sessions with prefix
+byobu list-sessions | grep '^xr_' | cut -d: -f1 | xargs -I{} byobu kill-session -t {}
+```
 
 ## 🐛 Troubleshooting
 
@@ -295,7 +362,7 @@ git clone https://github.com/sqlmapproject/sqlmap.git ~/sqlmap
 ./sqlmap_runner.py --sqlmap ~/sqlmap/sqlmap.py ...
 ```
 
-### Byobu/Tmux Not Creating Sessions
+### Byobu Not Creating Sessions
 
 ```bash
 # List sessions
