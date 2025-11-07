@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
 SQLMap Runner - Automated byobu session launcher for SQL injection testing
-Reads CSV from FINAL_FIX.py and creates byobu sessions with sqlmap
+Reads request files from xr_request_generator.py and creates byobu sessions with sqlmap
 """
 
 import argparse
-import csv
 import re
 import subprocess
 import sys
 from pathlib import Path
 from collections import defaultdict
-from urllib.parse import urlparse
 
 # ANSI color codes
 COLOR_YELLOW = '\033[93m'
@@ -30,48 +28,63 @@ BANNER_LINES = [
 BANNER = f"{COLOR_YELLOW}" + "\n".join(BANNER_LINES) + f"{COLOR_RESET}"
 
 # SQLMAP COMMAND TEMPLATE - EDIT THIS TO CUSTOMIZE SQLMAP PARAMETERS
-SQLMAP_CMD_TEMPLATE = "python3 {sqlmap_path} -u '{url}' -p '{param}' --method {method} --risk 3 --level 5 --batch"
+SQLMAP_CMD_TEMPLATE = 'python3 {sqlmap_path} -r "{request_file}" -p "{parameter}" --risk 3 --level 5 --batch'
 
 
-def load_csv_data(csv_file):
+def parse_request_filename(filename):
     """
-    Load CSV file and group vulnerabilities by domain
+    Parse request filename to extract parameter and method
+    Format: param_METHOD_001.txt (e.g., anyo_i_POST_001.txt)
     
     Returns:
-        dict: {domain: [list of vuln dicts]}
+        tuple: (parameter, method) or (None, None) if parsing fails
     """
-    if not Path(csv_file).exists():
-        print(f"{COLOR_YELLOW}Error: CSV file not found: {csv_file}{COLOR_RESET}")
+    match = re.match(r'^(.+)_(GET|POST)_\d+\.txt$', filename)
+    if match:
+        param = match.group(1)
+        method = match.group(2)
+        return param, method
+    return None, None
+
+
+def load_request_files(req_dir):
+    """
+    Scan request directory and group request files by domain
+    Directory structure: requests/domain/param_METHOD_001.txt
+    
+    Returns:
+        dict: {domain: [list of request file dicts]}
+    """
+    req_path = Path(req_dir)
+    
+    if not req_path.exists():
+        print(f"{COLOR_YELLOW}Error: Request directory not found: {req_dir}{COLOR_RESET}")
+        sys.exit(1)
+    
+    if not req_path.is_dir():
+        print(f"{COLOR_YELLOW}Error: {req_dir} is not a directory{COLOR_RESET}")
         sys.exit(1)
     
     domains = defaultdict(list)
     
-    # Auto-detect delimiter (comma or tab)
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        first_line = f.readline().strip()
-        delimiter = ',' if ',' in first_line else '\t'
-        f.seek(0)  # Reset to beginning
+    # Scan subdirectories (each subdirectory is a domain)
+    for domain_dir in sorted(req_path.iterdir()):
+        if not domain_dir.is_dir():
+            continue
         
-        # CSV format: domain, vuln_count, url, parameter, method, sqli_type
-        for line in f:
-            line = line.strip()
-            if not line:
+        domain = domain_dir.name
+        
+        # Scan request files in domain directory
+        for req_file in sorted(domain_dir.glob('*.txt')):
+            param, method = parse_request_filename(req_file.name)
+            
+            if param is None or method is None:
                 continue
             
-            parts = line.split(delimiter)
-            if len(parts) < 6:
-                continue
-            
-            # Skip header row if present
-            if parts[0].lower() == 'domain' or parts[3].lower() == 'parameter':
-                continue
-            
-            domain = parts[0].replace('https://', '').replace('http://', '')
             domains[domain].append({
-                'url': parts[2],
-                'parameter': parts[3],
-                'method': parts[4],
-                'sqli_type': parts[5]
+                'request_file': str(req_file.absolute()),
+                'parameter': param,
+                'method': method
             })
     
     return domains
@@ -109,61 +122,113 @@ def select_top_vulns(vulns, max_count=3):
 
 
 def sanitize_session_name(domain):
-    """Convert domain to valid byobu session name"""
-    # Replace dots with underscores, remove special chars
-    return domain.replace('.', '_').replace('-', '_').replace('/', '_')
+    """Convert domain to valid byobu session name (letters and numbers only)"""
+    # Replace dots, dashes, slashes with underscores, remove all other special chars
+    sanitized = domain.replace('.', '_').replace('-', '_').replace('/', '_')
+    # Remove any remaining special characters, keep only alphanumeric and underscores
+    sanitized = ''.join(c for c in sanitized if c.isalnum() or c == '_')
+    return sanitized
 
 
-def create_byobu_session(domain, vulns, prefix, sqlmap_path, dry_run=False, log_file=None):
+def session_exists(session_name):
+    """Check if byobu session already exists"""
+    try:
+        result = subprocess.run(
+            f"byobu list-sessions 2>/dev/null | grep -q '^{session_name}:'",
+            shell=True,
+            capture_output=True
+        )
+        return result.returncode == 0
+    except:
+        return False
+
+
+def get_unique_session_name(base_name):
     """
-    Create byobu session for a domain with windows for each vulnerability
+    Get unique session name by adding number suffix if session exists
+    Returns: unique session name (e.g., xr_domain_2, xr_domain_3)
+    """
+    if not session_exists(base_name):
+        return base_name
+    
+    # Session exists, find next available number
+    counter = 2
+    while counter < 100:  # Safety limit
+        candidate = f"{base_name}_{counter}"
+        if not session_exists(candidate):
+            return candidate
+        counter += 1
+    
+    # Fallback: use timestamp
+    import time
+    return f"{base_name}_{int(time.time())}"
+
+
+def create_byobu_session(domain, vulns, prefix, sqlmap_path, log_file=None):
+    """
+    Create byobu session for a domain with windows for each request file
     
     Args:
         domain: Domain name
-        vulns: List of vulnerabilities (max 3)
+        vulns: List of request file dicts (max 3)
         prefix: Session name prefix
         sqlmap_path: Path to sqlmap.py
-        dry_run: If True, only print commands without executing
         log_file: Optional file to log all sqlmap commands
     """
-    session_name = f"{prefix}_{sanitize_session_name(domain)}"
+    base_session_name = f"{prefix}_{sanitize_session_name(domain)}"
+    session_name = get_unique_session_name(base_session_name)
     
     if not vulns:
-        print(f"{COLOR_YELLOW}No vulnerabilities for {domain}, skipping...{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}No request files for {domain}, skipping...{COLOR_RESET}")
         return
     
     # Build byobu commands and collect sqlmap commands for logging
     commands = []
     sqlmap_commands = []
     
-    # First vulnerability - create new session
+    # First request file - create new session
     first_vuln = vulns[0]
     window_name = first_vuln['parameter'][:20]  # Limit window name length
     sqlmap_cmd = SQLMAP_CMD_TEMPLATE.format(
         sqlmap_path=sqlmap_path,
-        url=first_vuln['url'],
-        param=first_vuln['parameter'],
-        method=first_vuln['method']
+        request_file=first_vuln['request_file'],
+        parameter=first_vuln['parameter']
     )
     sqlmap_commands.append(sqlmap_cmd)
     
-    # Create session with first window in detached mode
-    create_cmd = f"byobu new-session -d -s '{session_name}' -n '{window_name}' '{sqlmap_cmd}'"
+    # Create session WITHOUT command first
+    create_cmd = f"byobu new-session -d -s {session_name} -n {window_name}"
     commands.append(create_cmd)
     
-    # Additional vulnerabilities - create new windows (no send-keys needed)
-    for vuln in vulns[1:]:
+    # Send the sqlmap command to the first window
+    # Use literal string mode with -l flag to avoid shell interpretation
+    send_cmd = f"byobu send-keys -t {session_name}:0 -l '{sqlmap_cmd}'"
+    commands.append(send_cmd)
+    # Send Enter separately
+    enter_cmd = f"byobu send-keys -t {session_name}:0 Enter"
+    commands.append(enter_cmd)
+    
+    # Additional request files - create new windows
+    for idx, vuln in enumerate(vulns[1:], start=1):
         window_name = vuln['parameter'][:20]
         sqlmap_cmd = SQLMAP_CMD_TEMPLATE.format(
             sqlmap_path=sqlmap_path,
-            url=vuln['url'],
-            param=vuln['parameter'],
-            method=vuln['method']
+            request_file=vuln['request_file'],
+            parameter=vuln['parameter']
         )
         sqlmap_commands.append(sqlmap_cmd)
         
-        new_window_cmd = f"byobu new-window -t '{session_name}' -n '{window_name}' '{sqlmap_cmd}'"
+        # Create new window WITHOUT command
+        new_window_cmd = f"byobu new-window -t {session_name} -n {window_name}"
         commands.append(new_window_cmd)
+        
+        # Send the sqlmap command to the window
+        # Use literal string mode with -l flag to avoid shell interpretation
+        send_cmd = f"byobu send-keys -t {session_name}:{idx} -l '{sqlmap_cmd}'"
+        commands.append(send_cmd)
+        # Send Enter separately
+        enter_cmd = f"byobu send-keys -t {session_name}:{idx} Enter"
+        commands.append(enter_cmd)
     
     # Print session info
     print(f"\n{COLOR_CYAN}[+] Domain:{COLOR_RESET} {COLOR_MAGENTA}{domain}{COLOR_RESET}")
@@ -171,7 +236,8 @@ def create_byobu_session(domain, vulns, prefix, sqlmap_path, dry_run=False, log_
     print(f"    {COLOR_GREEN}Windows:{COLOR_RESET} {len(vulns)}")
     
     for i, vuln in enumerate(vulns, 1):
-        print(f"      {COLOR_YELLOW}W{i}:{COLOR_RESET} {vuln['parameter']} ({vuln['method']}) - {vuln['sqli_type']}")
+        req_filename = Path(vuln['request_file']).name
+        print(f"      {COLOR_YELLOW}W{i}:{COLOR_RESET} {vuln['parameter']} ({vuln['method']}) - {req_filename}")
     
     # Log commands to file if specified
     if log_file:
@@ -180,19 +246,15 @@ def create_byobu_session(domain, vulns, prefix, sqlmap_path, dry_run=False, log_
             for sqlmap_cmd in sqlmap_commands:
                 f.write(f"{sqlmap_cmd}\n")
     
-    if dry_run:
-        print(f"\n{COLOR_YELLOW}[DRY RUN] Commands:{COLOR_RESET}")
-        for cmd in commands:
-            print(f"  {cmd}")
-        return
-    
     # Execute commands
     for cmd in commands:
         try:
-            subprocess.run(cmd, shell=True, check=True, capture_output=True)
+            # Use shell=True for byobu commands (they need shell expansion)
+            result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             print(f"{COLOR_YELLOW}Warning: Failed to execute: {cmd}{COLOR_RESET}")
-            print(f"{COLOR_YELLOW}Error: {e.stderr.decode()}{COLOR_RESET}")
+            if e.stderr:
+                print(f"{COLOR_YELLOW}Error: {e.stderr}{COLOR_RESET}")
 
 
 def main():
@@ -200,16 +262,33 @@ def main():
     print()
     
     parser = argparse.ArgumentParser(description='SQLMap Runner - Automated byobu session launcher')
-    parser.add_argument('--csv', required=True, help='Path to CSV file with vulnerabilities (from FINAL_FIX.py)')
+    parser.add_argument('-r', '--request', required=True, help='Path to request files directory (from xr_request_generator.py)')
     parser.add_argument('--sqlmap', required=True, help='Path to sqlmap.py (e.g., sqlmap/sqlmap.py)')
-    parser.add_argument('-d', '--domains', type=int, help='Process only first N domains')
+    parser.add_argument('-c', '--count', type=int, help='Process only first N domains')
     parser.add_argument('-w', '--windows', type=int, default=3, help='Max windows (parameters) per domain (default: 3)')
     parser.add_argument('--start', type=int, default=1, help='Start from Nth domain (default: 1)')
     parser.add_argument('-pf', '--prefix', default='xr', help='Session name prefix (default: xr)')
     parser.add_argument('--log', help='Log file to save all sqlmap commands')
-    parser.add_argument('--dry-run', action='store_true', help='Print commands without executing')
+    parser.add_argument('--stop', action='store_true', help='Stop (kill) all existing xr_* sessions before starting')
     
     args = parser.parse_args()
+    
+    # Handle --stop flag: kill all existing xr_* sessions
+    if args.stop:
+        print(f"{COLOR_YELLOW}Stopping all existing xr_* sessions...{COLOR_RESET}")
+        try:
+            result = subprocess.run("byobu list-sessions 2>/dev/null | grep '^xr_' | cut -d: -f1", 
+                                  shell=True, capture_output=True, text=True)
+            if result.stdout.strip():
+                sessions = result.stdout.strip().split('\n')
+                for session in sessions:
+                    subprocess.run(f"byobu kill-session -t {session}", shell=True, capture_output=True)
+                    print(f"{COLOR_GREEN}Killed session: {session}{COLOR_RESET}")
+                print(f"{COLOR_GREEN}Stopped {len(sessions)} session(s){COLOR_RESET}\n")
+            else:
+                print(f"{COLOR_CYAN}No xr_* sessions found{COLOR_RESET}\n")
+        except Exception as e:
+            print(f"{COLOR_YELLOW}Warning: Failed to stop sessions: {e}{COLOR_RESET}\n")
     
     # Normalize sqlmap path
     if not args.sqlmap.startswith(('./', '/', '~')):
@@ -220,9 +299,9 @@ def main():
         print(f"{COLOR_YELLOW}Error: SQLMap not found: {args.sqlmap}{COLOR_RESET}")
         sys.exit(1)
     
-    # Load CSV data
-    print(f"{COLOR_CYAN}Loading vulnerabilities from:{COLOR_RESET} {args.csv}")
-    domains_data = load_csv_data(args.csv)
+    # Load request files
+    print(f"{COLOR_CYAN}Loading request files from:{COLOR_RESET} {args.request}")
+    domains_data = load_request_files(args.request)
     
     # Get unique domains
     unique_domains = sorted(domains_data.keys())
@@ -232,7 +311,7 @@ def main():
     
     # Apply domain filtering
     start_idx = args.start - 1  # Convert to 0-based index
-    end_idx = start_idx + args.domains if args.domains else total_domains
+    end_idx = start_idx + args.count if args.count else total_domains
     
     selected_domains = unique_domains[start_idx:end_idx]
     
@@ -240,17 +319,14 @@ def main():
         print(f"{COLOR_YELLOW}No domains to process with given filters{COLOR_RESET}")
         sys.exit(0)
     
-    print(f"{COLOR_CYAN}Processing domains {args.start} to {args.start + len(selected_domains) - 1} ({len(selected_domains)} total){COLOR_RESET}")
-    
-    if args.dry_run:
-        print(f"{COLOR_YELLOW}[DRY RUN MODE - No sessions will be created]{COLOR_RESET}\n")
+    print(f"{COLOR_CYAN}Processing domains {args.start} to {args.start + len(selected_domains) - 1} ({len(selected_domains)} total){COLOR_RESET}\n")
     
     # Initialize log file if specified
     if args.log:
         with open(args.log, 'w', encoding='utf-8') as f:
             f.write(f"# SQLMap Commands Log\n")
-            f.write(f"# Generated by sqlmaprunner.py\n")
-            f.write(f"# CSV: {args.csv}\n")
+            f.write(f"# Generated by sqlmap_runner.py\n")
+            f.write(f"# Request directory: {args.request}\n")
             f.write(f"# Timestamp: {__import__('datetime').datetime.now()}\n")
         print(f"{COLOR_GREEN}Logging commands to: {args.log}{COLOR_RESET}\n")
     
@@ -262,7 +338,7 @@ def main():
         top_vulns = select_top_vulns(vulns, max_count=args.windows)
         
         # Create byobu session
-        create_byobu_session(domain, top_vulns, args.prefix, args.sqlmap, dry_run=args.dry_run, log_file=args.log)
+        create_byobu_session(domain, top_vulns, args.prefix, args.sqlmap, log_file=args.log)
     
     # Summary
     print(f"\n{COLOR_GREEN}{'='*60}{COLOR_RESET}")
